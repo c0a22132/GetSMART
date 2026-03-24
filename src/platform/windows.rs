@@ -128,10 +128,30 @@ pub fn get_smart(device_id: &str) -> Result<SmartReport, GetSmartError> {
         }
         DeviceProtocol::Ata => {
             drop(probe_handle);
-            let handle = open_physical_drive(index, GENERIC_READ_ACCESS | GENERIC_WRITE_ACCESS)?;
+            let handle = open_ata_physical_drive(index)?;
             get_ata_report(handle, device, index)
         }
     }
+}
+
+fn open_ata_physical_drive(index: u32) -> Result<Handle, GetSmartError> {
+    // Some ATA/SATA devices reject GENERIC_WRITE with ERROR_BUSY (170).
+    // Retry with progressively lower access so SMART IOCTLs can still proceed.
+    let access_candidates = [GENERIC_READ_ACCESS | GENERIC_WRITE_ACCESS, GENERIC_READ_ACCESS, 0];
+    let mut last_error = None;
+
+    for desired_access in access_candidates {
+        match open_physical_drive(index, desired_access) {
+            Ok(handle) => return Ok(handle),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        GetSmartError::IoError(format!(
+            "failed to open ATA drive PhysicalDrive{index} with all access modes"
+        ))
+    }))
 }
 
 fn get_nvme_report(handle: Handle, device: DeviceInfo) -> Result<SmartReport, GetSmartError> {
